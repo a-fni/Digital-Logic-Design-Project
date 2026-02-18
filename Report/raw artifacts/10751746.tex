@@ -1,0 +1,271 @@
+\documentclass{article}
+\usepackage{graphicx}
+\usepackage{wrapfig}
+
+\graphicspath{{./Images/}}
+
+\title{\textbf{Relazione Prova Finale Reti Logiche}}
+\author{Ferrarini Andrea (10751746) - Politecnico Di Milano}
+\date{\emph{Consegna in maggio 2023}}
+
+\begin{document}
+\maketitle
+
+\newpage
+\section{Introduzione}
+L'obbiettivo della seguente relazione è quello di illustrare le modalità con cui è avvenuta la progettazione,
+e susseguente realizzazione in VHDL, della prova finale di reti logiche dell'anno accademico 2022-2023.
+\\
+
+In sintesi, il componente hardware specificato, ha il compito di fungere da "adattatore" fra una memoria
+(indirizzata al byte e con indirizzi a 16bit) ed un ingresso di tipo seriale. Parafrasando, dunque, è
+necessario esso effettui la conversione di un ingresso di tipo seriale in un indirizzo a 16bit ben formato. 
+
+A complicare le cose, tuttavia, vi è il fatto che il dato letto da memoria non dovrà semplicemente essere
+mostrato in uscita, ma dovrà, bensì, essere condotto verso uno di quattro possibili \emph{canali}. Il
+canale su cui è necessario scrivere viene sempre indicato secondo una codifica binaria naturale in un preambolo
+dell'ingresso (a cui, d'ora in avanti, ci riferiremo per semplicità con \emph{intestazione}) dalla dimensione
+di 2 bit.\\
+È importante notare che fra letture consecutive della memoria i canali di uscita non dovranno essere azzerati, 
+ma dovranno continuare a mostrare i dati letti precedentemente. Inoltre, tali dati dovranno essere visibili
+solamente per la durata di un ciclo di clock al termine della lettura da memoria, in tutti gli altri casi i bit
+di uscita dovranno essere posti a zero.
+
+\begin{wrapfigure}{r}{0.5\textwidth}
+	\centering	
+	\includegraphics[width=0.45\textwidth]{IntroductionSchematics.drawio}
+	\caption{Schema semplificato}
+	\label{IntroductionSchematics}
+\end{wrapfigure}
+Infine, un ultimo fatto da tenere in considerazione in fase di progettazione è legato al formato dell' ingresso:
+a seguito dei due bit di intestazione, dovrà, naturalmente, seguire un indirizzo di memoria. Quest'ultimo,
+tuttavia, avrà una lunghezza \textbf{variabile}, pari a $N$ bit, con $ N \in [0, 16]$.\\Pertanto l'utente esterno
+che si interfaccerà con il nostro modulo avrà la possibilità di fornire in ingresso indirizzi di
+memoria completi ($N = 16$), assenti ($N = 0$), o perfino parziali. In ogni caso, è compito
+del modulo assicurarsi gli indirizzi vengano forniti alla memoria sempre ben formati, e da specifica ciò dovrà
+avvenire tramite un'eventuale estensione con zeri della parte più significativa della sequenza fornita.\\
+Otteniamo, dunque, uno schema semplificato del nostro circuito in figura \ref{IntroductionSchematics}.
+
+\newpage
+\section{Architettura}
+Prima di cominciare a descrivere più in dettaglio il modulo progettato, definiamo formalmente i segnali in
+ingresso ed uscita a cui faremo riferimento:
+\begin{itemize}
+	\item Ingresso seriale (contenente intestazione e indirizzo): \textbf{i\_w}
+	\item Segnale di controllo (segnala l'inizio della trasmissione di \emph{i\_w}): \textbf{i\_start}
+	\item Segnale di abilitazione alla lettura della memoria: \textbf{o\_mem\_en}
+	\item Indirizzo fornito alla memoria: \textbf{o\_mem\_addr} - bus 16 bit
+	\item Dato letto da memoria: \textbf{i\_mem\_data} - bus 8 bit
+	\item Uscite del modulo (una per ognuno dei quattro canali): \textbf{o\_z0}, \textbf{o\_z1},
+		\textbf{o\_z2}, \textbf{o\_z3} - bus 8 bit
+	\item Segnale di terminazione (atto a segnalare la fine della scrittura sulle uscite): \textbf{o\_done}
+\end{itemize}
+Naturalmente, saranno anche presenti un segnale di clock (\textbf{i\_clk}) e uno di reset del modulo
+(\textbf{i\_rst}).\\
+
+Logicamente, possiamo suddividere il problema in due sotto parti, delegando i diversi compiti del nostro
+componente a sotto-moduli specializzati.\\
+	Otteniamo, quindi, il seguente schema di alto livello: 
+\begin{figure}[h]
+	\centering
+	\includegraphics[width=0.75\textwidth]{ModulosSchematics.drawio}
+	\caption{Schema moduli}
+	\label{ModulosSchematics}
+\end{figure}
+\\
+
+Analizziamo ora in dettaglio i due moduli sopra illustrati.
+
+\subsection{Modulo gestione ingressi e conversione indirizzi}
+Il primo modulo del nostro componente ha il compito di ricevere in ingresso i bit forniti da \emph{i\_w},
+convertire i bit di indirizzo in indirizzi a 16 bit ben formati, trasmettere i 2 bit di intestazione
+ricevuti al modulo di gestione delle uscite e, infine, trasmettere alla memoria l'indirizzo ben formato
+da cui effettura la lettura.\\
+Otteniamo, in definitiva, il seguente schema circuitale per il primo modulo:
+\begin{figure}[h]
+	\centering
+	\includegraphics[width=0.60\textwidth]{InputAndAddressModule.drawio}
+	\caption{Modulo gestione ingressi e conversione indirizzo (\emph{i\_clk} e \emph{i\_rst} impliciti)}
+	\label{InputAndAddressModule}
+\end{figure}\\
+Analizziamo, a questo punto, la sua struttura:
+\begin{itemize}
+	\item Sono presenti due flip-flop, \emph{CH1} e \emph{CH0}, adibiti alla memorizzazione dei bit di
+		intestazione da inoltrare successivamente al modulo di gestione uscite. I due flip-flop sono
+		controllati da due bit di abilitazione alla scrittura indipendenti.
+	\item È presente un registro serie-parallelo \emph{ADDR} da 17 bit. Ad esso sono collegati, oltre
+		al bit in ingresso, due bit di controllo:
+		\begin{enumerate}
+			\item \textbf{addr\_load:} bit di abilitazione alla scrittura del registro. Quando
+				questo bit è alto, il contenuto del registro subisce uno shift logico a
+				sinistra e l'unico bit in ingresso diventa il nuovo LSB del registro.
+			\item \textbf{addr\_wipe:} bit di azzeramento \textbf{sincrono} del contenuto del
+				registro.
+		\end{enumerate} 
+\end{itemize}
+Da un punto di vista funzionale osserviamo subito che il registro serie-parallelo \emph{ADDR}, se azzerato
+all'inizio di ogni sequenza in ingresso, converte correttamente gli $N$ bit di indirizzo
+in indirizzi ben formati. Tuttavia, salta subito all'occhio il fatto che \emph{ADDR} sia un registro a 17 bit,
+e non a 16 bit. Per comprenderne la ragione, consideriamo il seguente problema: non appena il bit di controllo
+\emph{i\_start} passa da alto a basso, sarà necessario concludere la lettura dei bit in ingresso forniti da
+\emph{i\_w}. Non è possibile a tal fine, però, effettuare semplicemente una transizione di stato che disabiliti
+la scrittura in \emph{ADDR}. Così facendo, infatti, la scrittua nel registro serie-parallelo verrebbe
+effettivamente interrotta solo il ciclo di clock successivo.\\
+Per ovviare a tale problema, è sufficiente dimensionare \emph{ADDR} con un bit aggiuntivo rispetto al numero
+massimo di 16, e considerare sempre come validi soltanto i 16 bit più significativi memorizzati (in quanto il
+LSB sarà sempre frutto di una scrittura in eccesso).
+
+\subsection{Modulo gestione uscite}
+Il secondo sotto-modulo del nostro componente HW riceverà in ingresso i 2 bit di intestazione (inoltrati dal
+primo modulo) ed una parola da 8 bit letta da memoria (\emph{i\_mem\_data}). Il suo compito è semplicemente
+quello di redirigere il byte in ingresso su uno dei quattro canali d'uscita. Dovendo il modulo, fra letture
+da memoria successive, mantenere traccia dei dati letti precedentemente, diventa necessaria l'associazione di
+ogni canale d'uscita ad un registro parallelo-parallelo dalla dimensione di 8 bit. Si ottiene quindi il seguente schema circuitale:
+\begin{figure}[h]
+	\centering
+	\includegraphics[width=0.75\textwidth]{OutputModule.drawio}
+	\caption{Modulo gestione uscite (\emph{i\_clk} e \emph{i\_rst} impliciti)}
+	\label{OutputModule}
+\end{figure}
+
+La scrittura di ogni registro, come si può vedere, viene effettuata semplicemente collegando il bit di
+abilitazione alla scrittura all'uscita di una porta logica AND, la quale prende in ingresso i due bit di
+intestazione ed un bit di controllo \emph{z\_ctrl}. L'uscita di ogni porta AND sarà alta se, e soltanto se,
+i due bit di intestazione contengono effettivamente la codifica del canale d'uscita cui la porta AND è associata,
+ed il bit di controllo è anch'esso alto.\\
+
+\subsection{Schema dettagliato complessivo}
+Mettendo insieme quanto detto riguardo i due moduli, otteniamo il seguente schema circuitale complessivo, o
+\emph{datapath}:
+\begin{figure}[h]
+	\centering
+	\includegraphics[width=\textwidth]{FullSchematics.drawio}
+	\caption{Schema complessivo (\emph{i\_clk} e \emph{i\_rst} impliciti)}
+	\label{FullSchematics}
+\end{figure}
+
+Lo schema mostrato in \ref{FullSchematics} contiene tutta la circuiteria necessaria per il corretto
+funzionamento del nostro componente HW, ciononostante, è necessario associarvi anche un qualche
+\emph{controllore} che piloti appropriatamente i bit di controllo interni, attivando e disattivando
+i diversi componenti e percorsi logici al momento giusto.\\
+Implementiamo tale controllore con una macchina a stati dotata dei seguenti ingressi:
+\begin{itemize}
+	\item I segnali di clock e reset
+	\item Il segnale di controllo in ingresso \emph{i\_start}
+\end{itemize}
+E dotata delle seguenti uscite:
+\begin{itemize}
+	\item Il segnale di azzeramento del registro ADDR \emph{addr\_wipe}
+	\item I segnali di abilitazione alla scrittura di tutti i registri, ovvero \emph{ch1\_load}, 
+		\emph{ch0\_load}, \emph{addr\_load} e \emph{z\_ctrl}
+	\item Il segnale di controllo dei multiplexer M0, M1, M2 ed M3, nonché il segnale di terminazione
+		di scrittura in uscita, \emph{o\_done}
+\end{itemize}
+Avendo già discusso le specifiche dei due moduli del datapath e avendo già descritto la funzione
+di ciascun segnale di controllo interno, otteniamo:
+\begin{figure}[h]
+	\centering
+	\includegraphics[width=\textwidth]{FiniteStateMachine.drawio}
+	\caption{Macchina a stati finiti}
+	\label{FIniteStateMachine}
+\end{figure}
+\\
+
+Si tratta, chiaramente, di una macchina di Moore, in quanto le uscite non hanno alcuna dipendenza dagli ingressi.\\
+Riassumiamo brevemente di seguito la funzione di ciascuno stato:
+\begin{itemize}
+	\item \textbf{S0:} è lo stato di reset del circuito. Non appena raggiunto viene immediatamente
+		azzerato il registro serie-parallelo \emph{ADDR} e abilita la scrittura di \emph{i\_w}
+		in \emph{CH1}.
+	\item \textbf{S1:} raggiunto da \textbf{S0} non appena \emph{i\_start} passa da basso ad  alto, in
+		questo stato si inibisce la scrittura di \emph{i\_w} in \emph{CH1} e la si abilita in
+		\emph{CH0}. Inoltre, il segnale di azzeramento di \emph{ADDR} viene spento.
+	\item \textbf{S2:} questo stato viene raggiunto sempre a partire da \textbf{S1} (transizione forzata)
+		dopo un ciclo di clock. Il suo scopo è semplicemente quello di inibire la scrittura di
+		\emph{i\_w} in \emph{CH0} e di abilitarla in \emph{ADDR}.
+	\item \textbf{S3:} a partire da \textbf{S2}, se il bit di controllo in ingresso \emph{i\_start}
+		risulta ancora alto dopo due cicli di clock, potremmo concludere di non trovarci nel caso
+		limite $N = 0$. Dunque, effettueremo una transizione a questo stato, dove rimarremo
+		fintantoché \emph{i\_start} non torni basso.
+	\item \textbf{S4:} a partire da \textbf{S2} o \textbf{S3}, non appena \emph{i\_start} passa da alto
+		a basso, si raggiunge questo stato. Finalmente la lettura di \emph{i\_w} termina (si spegne il
+		bit di controllo \emph{addr\_load}) e si effettua la lettura da memoria (attivando
+		\emph{o\_mem\_en}).
+	\item \textbf{S5:} completata la lettura da memoria, questo stato si assicura il dato letto venga scritto
+		nel registro d'uscita appropriato.
+	\item \textbf{S6:} terminata la scrittura nel registro indicato dai due bit di intestazione, si porta
+		da basso ad alto il segnale di terminazione \emph{o\_done}, e, trascorso un ciclo di clock, si
+		effettua una transizione forzata allo stato iniziale \textbf{S0}, dove il bit di terminazione
+		viene riportato basso.
+\end{itemize}
+
+\subsection{Sviluppo in VHDL del modulo}
+Arrivati a questo punto della progettazione non ci resta che tradurre in codice VHDL il modulo progettato.\\
+Partiamo con alcuni aspetti preliminari:
+\begin{itemize}
+	\item Come prima cosa, è stato definito un file \emph{clock.xdc} per la specifica del constraint di clock.
+		Dovendo il progetto funzionare con ciclo di clock non superiore a 100ns, il constraint è stato
+		imposto proprio a 100ns.
+	\item La sintesi è avvenuta su FPGA \textbf{Artix-7 FPGA xc7a200tfbg484-1}.
+	\item Il segnale di reset è stato considerato asincrono.
+	\item La memoria considerata è sensibile al fronte di salita del segnale di clock,
+		e le operazioni di lettura hanno una latenza di 1ns.
+\end{itemize}
+Da un punto di vista implementativo, si è fatto uso di due \emph{architecture}, una per il datapath ed una
+per la macchina a stati (la quale crea un \emph{component} del datapath per interagirci).\\
+Ogni organo di memoria è stato realizzato prendendo come riferimento il seguente codice:
+\begin{verbatim}
+process (i_clk, i_rst)
+begin
+    if (i_rst = '1') then
+        ch1_o  <= '0';
+    elsif (rising_edge(i_clk)) then
+        if (ch1_load = '1') then
+            ch1_o <= i_w;
+        end if;
+    end if;
+end process;
+\end{verbatim}
+Discorso leggermente diverso va fatto per il registro serie-parallelo: ad essere memorizzato, nel suo caso,
+è uno \verb#std_logic_vector# di 17 bit costruito nel seguente modo:
+\begin{verbatim}
+next_addr <= addr_o(15 downto 0) & i_w;
+\end{verbatim}
+Ovvero concatenando i 16 bit meno signficativi già in memoria con il bit in ingresso. Ciò descrive perfettamente
+il comportamento di un registro serie-parallelo.
+Ricordiamo, infine, che ad essere collegati all'uscita \emph{o\_mem\_addr} saranno solamente i 16 bit più
+significativi di \emph{ADDR}:
+\begin{verbatim}
+o_mem_addr <= addr_o(16 downto 1);
+\end{verbatim}
+\newpage
+\section{Risultati sperimentali}
+La sintesi circuitale del progetto è avvenuta con successo, ed eseguendo i comandi \emph{report\_utilization} e
+\emph{report\_timing} nella console Tcl, è stata constatata l'assenza di latch ed un tempo di slack pari a
+96.562ns, valore piuttosto vicino al limite desiderato di 100ns. Osserviamo, comunque, che riducendo il
+valore imposto in \emph{clock.xdc} a 10ns e rieseguendo la sintesi, lo slack effettivamente raggiunge i
+6.409ns, per cui quanto a periodo di clock i risultati sono soddisfacenti.\\
+Passiamo, a questo punto, ai casi di test forniti:
+\begin{itemize}
+	\item \textbf{TB1, TB2 \& TB4:} sono semplici test circa il corretto funzionamento del componente,
+		con più di un reset e diverse sequenze in ingresso dalla lunghezza variabile. TB1 e TB4,
+		in particolare, inviano una stessa sequenza di \emph{i\_w} due volte, infamezzando la
+		ripetizione con un reset. TB1 e TB2, inoltre, provano a scrivere su tutti i differenti
+		canali di uscita, assicurandosi per ognuno il corretto funzionamento.
+	\item \textbf{TB3 \& TB5:} con durate attorno ai $\sim$ 600 cicli di clock, decisamente
+		i tb più vasti. Si tratta, pertanto, di stress test del componente a fronte di stimoli numerosi
+		e disparati. La differenza principale fra TB3 e TB5 sta nel fatto che TB3 esegua un unito reset
+		del componente in principio, mentre TB5 ne esegue diversi nell'arco delle prove, verificando
+		anche una corretta re-inizializzazione del componente \emph{in medias res}.
+	\item \textbf{TB6 \& TB7:} vengono testati i casi limiti di \emph{i\_w} di lunghezza massima e minima, e
+		composto da soli bit alti o soli bit bassi.
+\end{itemize}
+La simulazione dei test-bench, sia di tipo \emph{behavioral} che \emph{post-synthesis} è avvenuta con successo,
+indicando un corretto funzionamento del componente.
+
+\newpage
+\section{Conclusioni}
+Conclusioni
+
+\end{document}
+
